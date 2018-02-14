@@ -124,6 +124,8 @@ namespace zed_wrapper {
         boost::shared_ptr<tf2_ros::Buffer> tfBuffer;
         boost::shared_ptr<tf2_ros::TransformListener> tf_listener;
         bool publish_tf;
+        bool create_mesh;
+        std::string mesh_file;
 
         // Launch file parameters
         int resolution;
@@ -492,6 +494,7 @@ namespace zed_wrapper {
             ros::Time old_t = ros::Time::now();
             sl::ERROR_CODE grab_status;
             bool tracking_activated = false;
+            bool mapping_activated = false;
 
             // Get the parameters of the ZED images
             int width = zed.getResolution().width;
@@ -522,10 +525,14 @@ namespace zed_wrapper {
             sl::TrackingParameters trackParams;
             trackParams.area_file_path = odometry_DB.c_str();
 
+            sl::SpatialMappingParameters spatial_mapping_params;
+            spatial_mapping_params.range_meter = sl::SpatialMappingParameters::get(sl::SpatialMappingParameters::MAPPING_RANGE_FAR);
+            spatial_mapping_params.resolution_meter = sl::SpatialMappingParameters::get(sl::SpatialMappingParameters::MAPPING_RESOLUTION_LOW);
+            spatial_mapping_params.save_texture = false;
 
             sl::Mat leftZEDMat, rightZEDMat, depthZEDMat;
             // Main loop
-            while (nh_ns.ok()) {
+            while(nh_ns.ok()) { //MARCO: MIGHT HELP FOR BETTER TERMINATING && !boost::this_thread::interruption_requested())
                 // Check for subscribers
                 int rgb_SubNumber = pub_rgb.getNumSubscribers();
                 int rgb_raw_SubNumber = pub_raw_rgb.getNumSubscribers();
@@ -536,10 +543,10 @@ namespace zed_wrapper {
                 int depth_SubNumber = pub_depth.getNumSubscribers();
                 int cloud_SubNumber = pub_cloud.getNumSubscribers();
                 int odom_SubNumber = pub_odom.getNumSubscribers();
-                bool runLoop = (rgb_SubNumber + rgb_raw_SubNumber + left_SubNumber + left_raw_SubNumber + right_SubNumber + right_raw_SubNumber + depth_SubNumber + cloud_SubNumber + odom_SubNumber) > 0;
+                bool runLoop = ((rgb_SubNumber + rgb_raw_SubNumber + left_SubNumber + left_raw_SubNumber + right_SubNumber + right_raw_SubNumber + depth_SubNumber + cloud_SubNumber + odom_SubNumber) > 0) || create_mesh;
 
                 runParams.enable_point_cloud = false;
-                if (cloud_SubNumber > 0)
+                if (cloud_SubNumber > 0 || create_mesh)
                     runParams.enable_point_cloud = true;
                 // Run the loop only if there is some subscribers
                 if (runLoop) {
@@ -558,13 +565,25 @@ namespace zed_wrapper {
                     ros::Time t = ros::Time::now(); // Get current time
 
                     grabbing = true;
-                    if (computeDepth) {
+                    if (computeDepth || create_mesh) {
                         int actual_confidence = zed.getConfidenceThreshold();
                         if (actual_confidence != confidence)
                             zed.setConfidenceThreshold(confidence);
                         runParams.enable_depth = true; // Ask to compute the depth
                     } else
                         runParams.enable_depth = false;
+
+                    if(create_mesh && !mapping_activated)
+                    {
+                         if(!tracking_activated) zed.enableTracking(trackParams);
+                         zed.enableSpatialMapping(spatial_mapping_params);
+                         sl::SPATIAL_MAPPING_STATE state=zed.getSpatialMappingState();
+                         if(state!=sl::SPATIAL_MAPPING_STATE::SPATIAL_MAPPING_STATE_NOT_ENABLED)
+                         {
+                              mapping_activated=true;
+                              NODELET_INFO_STREAM("Spatial mapping enable");
+                         }
+                    }
 
                     grab_status = zed.grab(runParams); // Ask to not compute the depth
 
@@ -728,6 +747,14 @@ namespace zed_wrapper {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10)); // No subscribers, we just wait
                 }
             } // while loop
+            if(create_mesh){
+                sl::Mesh mesh;
+                zed.extractWholeMesh(mesh);
+                //mesh.filter(sl::MeshFilterParameters::MESH_FILTER_LOW);
+                mesh.save(sl::String(mesh_file.c_str()), sl::MESH_FILE_PLY_BIN);
+                NODELET_INFO_STREAM("Mesh file saved to: " << mesh_file);
+                zed.disableSpatialMapping();
+            }
             zed.close();
         }
 
@@ -770,6 +797,8 @@ namespace zed_wrapper {
 
             // Publish odometry tf
             nh_ns.param<bool>("publish_tf", publish_tf, true);
+            nh_ns.param<bool>("create_mesh", create_mesh, true);
+            nh_ns.param<std::string>("mesh_file", mesh_file, std::string());
 
             if (serial_number > 0)
                 ROS_INFO_STREAM("SN : " << serial_number);
@@ -781,6 +810,7 @@ namespace zed_wrapper {
             ROS_INFO_STREAM("depth_frame: " << depth_frame_id);
             // Status of odometry TF
             ROS_INFO_STREAM("Publish " << odometry_frame_id << " [" << (publish_tf ? "TRUE" : "FALSE") << "]");
+            ROS_INFO_STREAM("Create file " << mesh_file << " [" << (create_mesh ? "TRUE" : "FALSE") << "]");
 
             std::string img_topic = "image_rect_color";
             std::string img_raw_topic = "image_raw_color";
@@ -888,7 +918,7 @@ namespace zed_wrapper {
                 NODELET_INFO_STREAM(toString(err));
                 std::this_thread::sleep_for(std::chrono::milliseconds(2000));
             }
-
+           
             serial_number = zed.getCameraInformation().serial_number;
 
             //Reconfigure confidence
