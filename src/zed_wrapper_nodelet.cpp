@@ -137,7 +137,9 @@ namespace zed_wrapper {
         int resolution;
         int quality;
         int sensing_mode;
-        int rate;
+        int frame_rate;
+        int imu_rate;
+        int spin_rate;
         int gpu_id;
         int zed_id;
         int depth_stabilization;
@@ -330,13 +332,19 @@ namespace zed_wrapper {
             imu_msg.header.stamp = t;
             imu_msg.header.frame_id = imu_frame_id; // odom_frame
             
-            imu_msg.angular_velocity.x = imu_data.angular_velocity[0]*0.01745329251;
-            imu_msg.angular_velocity.y = imu_data.angular_velocity[1]*0.01745329251;
-            imu_msg.angular_velocity.z = imu_data.angular_velocity[2]*0.01745329251;
+            sl::Orientation quat=imu_data.getOrientation();
+            imu_msg.orientation.x = quat(2);	
+            imu_msg.orientation.y = -quat(0);
+            imu_msg.orientation.z = -quat(1);
+            imu_msg.orientation.w = quat(3);	
             
-            imu_msg.linear_acceleration.x = imu_data.linear_acceleration[0]*0.01745329251;
-            imu_msg.linear_acceleration.y = imu_data.linear_acceleration[1]*0.01745329251;
-            imu_msg.linear_acceleration.z = imu_data.linear_acceleration[2]*0.01745329251;
+            imu_msg.angular_velocity.x = imu_data.angular_velocity[2]*0.01745329251;
+            imu_msg.angular_velocity.y = -imu_data.angular_velocity[0]*0.01745329251;
+            imu_msg.angular_velocity.z = -imu_data.angular_velocity[1]*0.01745329251;
+            
+            imu_msg.linear_acceleration.x = imu_data.linear_acceleration[2];
+            imu_msg.linear_acceleration.y = -imu_data.linear_acceleration[0];
+            imu_msg.linear_acceleration.z = -imu_data.linear_acceleration[1];
 
             pub_imu_raw.publish(imu_msg);
         }
@@ -523,11 +531,14 @@ namespace zed_wrapper {
         }
 
         void device_poll() {
-            ros::Rate loop_rate(rate);
+            ros::Rate loop_rate(spin_rate);
             ros::Time old_t = ros::Time::now();
             sl::ERROR_CODE grab_status;
             bool tracking_activated = false;
             bool mapping_activated = false;
+            
+            ros::Duration frame_time(1.0 / frame_rate);
+            ros::Time frame_expected = old_t+frame_time;
 
             // Get the parameters of the ZED images
             int width = zed.getResolution().width;
@@ -565,7 +576,7 @@ namespace zed_wrapper {
 
             sl::Mat leftZEDMat, rightZEDMat, depthZEDMat;
             // Main loop
-            while (nh_ns.ok()) { //MARCO: MIGHT HELP FOR BETTER TERMINATING && !boost::this_thread::interruption_requested())
+            while (nh_ns.ok()) { //MIGHT HELP FOR BETTER TERMINATING && !boost::this_thread::interruption_requested())
                 // Check for subscribers
                 int rgb_SubNumber = pub_rgb.getNumSubscribers();
                 int rgb_raw_SubNumber = pub_raw_rgb.getNumSubscribers();
@@ -577,13 +588,25 @@ namespace zed_wrapper {
                 int cloud_SubNumber = pub_cloud.getNumSubscribers();
                 int odom_SubNumber = pub_odom.getNumSubscribers();
                 int imu_SubNumber  = pub_imu_raw.getNumSubscribers();
-                bool runLoop = ((rgb_SubNumber + rgb_raw_SubNumber + left_SubNumber + left_raw_SubNumber + right_SubNumber + right_raw_SubNumber + depth_SubNumber + cloud_SubNumber + odom_SubNumber) > 0) || create_mesh;
+                bool runLoop = ((rgb_SubNumber + rgb_raw_SubNumber + left_SubNumber + left_raw_SubNumber + right_SubNumber + right_raw_SubNumber + depth_SubNumber + cloud_SubNumber + odom_SubNumber + imu_SubNumber) > 0) || create_mesh;
 
                 runParams.enable_point_cloud = false;
                 if (cloud_SubNumber > 0 || create_mesh)
                     runParams.enable_point_cloud = true;
+
                 // Run the loop only if there is some subscribers
                 if (runLoop) {
+                    ros::Time t=ros::Time::now();
+                    // Publish the IMU if someone has subscribed to
+                    if (imu_SubNumber > 0) {
+                        zed.getIMUData(imud, sl::TIME_REFERENCE_CURRENT);
+                        publishIMU(imud, pub_imu_raw, imu_frame_id, t);
+                    }
+                    if(frame_expected>t){ 
+                      loop_rate.sleep(); continue; //goon nothing to be done at this point
+                    }
+                    frame_expected = t + frame_time;
+
                     if ((depth_stabilization || odom_SubNumber > 0) && !tracking_activated) { //Start the tracking
                         if (odometry_DB != "" && !file_exist(odometry_DB)) {
                             odometry_DB = "";
@@ -596,7 +619,6 @@ namespace zed_wrapper {
                         tracking_activated = false;
                     }
                     computeDepth = (depth_SubNumber + cloud_SubNumber + odom_SubNumber) > 0; // Detect if one of the subscriber need to have the depth information
-                    ros::Time t = ros::Time::now(); // Get current time
 
                     grabbing = true;
                     if (computeDepth || create_mesh) {
@@ -766,12 +788,6 @@ namespace zed_wrapper {
                         publishOdom(base_transform, pub_odom, odometry_frame_id, t);
                     }
 
-                    // Publish the IMU if someone has subscribed to
-                    if (imu_SubNumber > 0) {
-                        zed.getIMUData(imud, sl::TIME_REFERENCE_IMAGE);
-                        publishIMU(imud, pub_imu_raw, imu_frame_id, t);
-                    }
-
                     // Publish odometry tf only if enabled
                     if (publish_tf) {
                         //Note, the frame is published, but its values will only change if someone has subscribed to odom
@@ -805,7 +821,9 @@ namespace zed_wrapper {
             resolution = sl::RESOLUTION_HD720;
             quality = sl::DEPTH_MODE_PERFORMANCE;
             sensing_mode = sl::SENSING_MODE_STANDARD;
-            rate = 30;
+            spin_rate = 30;
+            frame_rate = 30;
+            imu_rate = 30;
             gpu_id = -1;
             zed_id = 0;
             serial_number = 0;
@@ -825,8 +843,7 @@ namespace zed_wrapper {
             // Get parameters from launch file
             nh_ns.getParam("resolution", resolution);
             nh_ns.getParam("quality", quality);
-            nh_ns.getParam("sensing_mode", sensing_mode);
-            nh_ns.getParam("frame_rate", rate);
+            nh_ns.getParam("sensing_mode", sensing_mode);            
             nh_ns.getParam("odometry_DB", odometry_DB);
             nh_ns.getParam("openni_depth_mode", openniDepthMode);
             nh_ns.getParam("gpu_id", gpu_id);
@@ -835,6 +852,12 @@ namespace zed_wrapper {
             int tmp_sn = 0;
             nh_ns.getParam("serial_number", tmp_sn);
             if (tmp_sn > 0) serial_number = tmp_sn;
+
+            nh_ns.getParam("frame_rate", frame_rate);
+            nh_ns.getParam("imu_rate", imu_rate);
+            spin_rate=(int)(imu_rate/frame_rate)*frame_rate;
+            if(spin_rate<frame_rate) spin_rate=frame_rate;
+            ROS_INFO_STREAM("actual imu rate: " << spin_rate);
 
             // Publish odometry tf
             nh_ns.param<bool>("publish_tf", publish_tf, true);
@@ -931,7 +954,7 @@ namespace zed_wrapper {
             if (!svo_filepath.empty())
                 param.svo_input_filename = svo_filepath.c_str();
             else {
-                param.camera_fps = rate;
+                param.camera_fps = frame_rate;
                 param.camera_resolution = static_cast<sl::RESOLUTION> (resolution);
                 if (serial_number == 0)
                     param.camera_linux_id = zed_id;
