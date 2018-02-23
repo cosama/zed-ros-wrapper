@@ -66,6 +66,10 @@
 
 #include <sl/Camera.hpp>
 
+//new for IMU data
+#include <sensor_msgs/Imu.h>
+
+
 using namespace std;
 
 namespace zed_wrapper {
@@ -109,6 +113,7 @@ namespace zed_wrapper {
         ros::Publisher pub_right_cam_info_raw;
         ros::Publisher pub_depth_cam_info;
         ros::Publisher pub_odom;
+        ros::Publisher pub_imu_raw; 
 
         // tf
         tf2_ros::TransformBroadcaster transform_odom_broadcaster;
@@ -118,6 +123,7 @@ namespace zed_wrapper {
         std::string depth_frame_id;
         std::string cloud_frame_id;
         std::string odometry_frame_id;
+        std::string imu_frame_id;
         std::string base_frame_id;
         std::string camera_frame_id;
         // initialization Transform listener
@@ -140,6 +146,7 @@ namespace zed_wrapper {
 
         //Tracking variables
         sl::Pose pose;
+        sl::IMUData imud;
         tf2::Transform base_transform;
 
         // zed object
@@ -309,6 +316,32 @@ namespace zed_wrapper {
             // Publish odometry message
             pub_odom.publish(odom);
         }
+
+
+        /* \brief Publish the IMU data of the mini camera with a ros Publisher
+         * \param IMUDATA : IMUData from Mini
+         * \param pub_imu_raw : the publisher object to use
+         * \param imu_frame_id : the id of the reference frame of the imu
+         * \param t : the ros::Time to stamp the image
+         */
+        void publishIMU(sl::IMUData imu_data, ros::Publisher &pub_imu_raw, string imu_frame_id, ros::Time t) {
+
+            sensor_msgs::Imu imu_msg;
+            imu_msg.header.stamp = t;
+            imu_msg.header.frame_id = imu_frame_id; // odom_frame
+            
+            imu_msg.angular_velocity.x = imu_data.angular_velocity[0]*0.01745329251;
+            imu_msg.angular_velocity.y = imu_data.angular_velocity[1]*0.01745329251;
+            imu_msg.angular_velocity.z = imu_data.angular_velocity[2]*0.01745329251;
+            
+            imu_msg.linear_acceleration.x = imu_data.linear_acceleration[0]*0.01745329251;
+            imu_msg.linear_acceleration.y = imu_data.linear_acceleration[1]*0.01745329251;
+            imu_msg.linear_acceleration.z = imu_data.linear_acceleration[2]*0.01745329251;
+
+            pub_imu_raw.publish(imu_msg);
+        }
+
+
 
         /* \brief Publish the pose of the camera as a transformation
          * \param base_transform : Transformation representing the camera pose from base frame
@@ -532,7 +565,7 @@ namespace zed_wrapper {
 
             sl::Mat leftZEDMat, rightZEDMat, depthZEDMat;
             // Main loop
-            while(nh_ns.ok()) { //MARCO: MIGHT HELP FOR BETTER TERMINATING && !boost::this_thread::interruption_requested())
+            while (nh_ns.ok()) { //MARCO: MIGHT HELP FOR BETTER TERMINATING && !boost::this_thread::interruption_requested())
                 // Check for subscribers
                 int rgb_SubNumber = pub_rgb.getNumSubscribers();
                 int rgb_raw_SubNumber = pub_raw_rgb.getNumSubscribers();
@@ -543,6 +576,7 @@ namespace zed_wrapper {
                 int depth_SubNumber = pub_depth.getNumSubscribers();
                 int cloud_SubNumber = pub_cloud.getNumSubscribers();
                 int odom_SubNumber = pub_odom.getNumSubscribers();
+                int imu_SubNumber  = pub_imu_raw.getNumSubscribers();
                 bool runLoop = ((rgb_SubNumber + rgb_raw_SubNumber + left_SubNumber + left_raw_SubNumber + right_SubNumber + right_raw_SubNumber + depth_SubNumber + cloud_SubNumber + odom_SubNumber) > 0) || create_mesh;
 
                 runParams.enable_point_cloud = false;
@@ -732,6 +766,12 @@ namespace zed_wrapper {
                         publishOdom(base_transform, pub_odom, odometry_frame_id, t);
                     }
 
+                    // Publish the IMU if someone has subscribed to
+                    if (imu_SubNumber > 0) {
+                        zed.getIMUData(imud, sl::TIME_REFERENCE_IMAGE);
+                        publishIMU(imud, pub_imu_raw, imu_frame_id, t);
+                    }
+
                     // Publish odometry tf only if enabled
                     if (publish_tf) {
                         //Note, the frame is published, but its values will only change if someone has subscribed to odom
@@ -777,6 +817,7 @@ namespace zed_wrapper {
             // Set  default coordinate frames
             // If unknown left and right frames are set in the same camera coordinate frame
             nh_ns.param<std::string>("odometry_frame", odometry_frame_id, "odometry_frame");
+            nh_ns.param<std::string>("imu_frame", imu_frame_id, "imu_frame");
             nh_ns.param<std::string>("base_frame", base_frame_id, "base_frame");
             nh_ns.param<std::string>("camera_frame", camera_frame_id, "camera_frame");
             nh_ns.param<std::string>("depth_frame", depth_frame_id, "depth_frame");
@@ -807,6 +848,7 @@ namespace zed_wrapper {
 
             // Print order frames
             ROS_INFO_STREAM("odometry_frame: " << odometry_frame_id);
+            ROS_INFO_STREAM("imu_frame: " << imu_frame_id);
             ROS_INFO_STREAM("base_frame: " << base_frame_id);
             ROS_INFO_STREAM("camera_frame: " << camera_frame_id);
             ROS_INFO_STREAM("depth_frame: " << depth_frame_id);
@@ -850,6 +892,7 @@ namespace zed_wrapper {
             cloud_frame_id = camera_frame_id;
 
             string odometry_topic = "odom";
+            string imu_topic = "imu";
 
             nh_ns.getParam("rgb_topic", rgb_topic);
             nh_ns.getParam("rgb_raw_topic", rgb_raw_topic);
@@ -872,6 +915,7 @@ namespace zed_wrapper {
             nh_ns.getParam("point_cloud_topic", point_cloud_topic);
 
             nh_ns.getParam("odometry_topic", odometry_topic);
+            nh_ns.getParam("imu_topic", imu_topic);
 
             nh_ns.param<std::string>("svo_filepath", svo_filepath, std::string());
 
@@ -974,6 +1018,9 @@ namespace zed_wrapper {
             //Odometry publisher
             pub_odom = nh.advertise<nav_msgs::Odometry>(odometry_topic, 1);
             NODELET_INFO_STREAM("Advertized on topic " << odometry_topic);
+
+            pub_imu_raw = nh.advertise<sensor_msgs::Imu>(imu_topic, 1);
+            NODELET_INFO_STREAM("Advertized on topic " << imu_topic);
 
             device_poll_thread = boost::shared_ptr<boost::thread> (new boost::thread(boost::bind(&ZEDWrapperNodelet::device_poll, this)));
         }
