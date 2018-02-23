@@ -797,7 +797,9 @@ namespace zed_wrapper {
 
             // Publish odometry tf
             nh_ns.param<bool>("publish_tf", publish_tf, true);
-            nh_ns.param<bool>("create_mesh", create_mesh, true);
+
+            // Create a mesh and store it on shutdown
+            nh_ns.param<bool>("create_mesh", create_mesh, false);
             nh_ns.param<std::string>("mesh_file", mesh_file, std::string());
 
             if (serial_number > 0)
