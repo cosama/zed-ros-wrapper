@@ -145,6 +145,7 @@ namespace zed_wrapper {
         int depth_stabilization;
         std::string odometry_DB;
         std::string svo_filepath;
+        bool svo_realtime;
 
         //Tracking variables
         sl::Pose pose;
@@ -159,7 +160,6 @@ namespace zed_wrapper {
         // flags
         int confidence;
         bool computeDepth;
-        bool grabbing = false;
         int openniDepthMode = 0; // 16 bit UC data in mm else 32F in m, for more info http://www.ros.org/reps/rep-0118.html
 
         // Point cloud variables
@@ -538,6 +538,7 @@ namespace zed_wrapper {
             bool mapping_activated = false;
             
             ros::Duration frame_time(1.0 / frame_rate);
+            ros::Duration spin_time(1.0 / spin_rate);
             ros::Time frame_expected = old_t+frame_time;
 
             // Get the parameters of the ZED images
@@ -596,7 +597,7 @@ namespace zed_wrapper {
 
                 // Run the loop only if there is some subscribers
                 if (runLoop) {
-                    ros::Time t=ros::Time::now();
+                    ros::Time t = ros::Time::now();
                     // Publish the IMU if someone has subscribed to
                     if (imu_SubNumber > 0) {
                         zed.getIMUData(imud, sl::TIME_REFERENCE_CURRENT);
@@ -605,7 +606,7 @@ namespace zed_wrapper {
                     if(frame_expected>t){ 
                       loop_rate.sleep(); continue; //goon nothing to be done at this point
                     }
-                    frame_expected = t + frame_time;
+                    frame_expected = t + frame_time-spin_time;
 
                     if ((depth_stabilization || odom_SubNumber > 0) && !tracking_activated) { //Start the tracking
                         if (odometry_DB != "" && !file_exist(odometry_DB)) {
@@ -620,7 +621,6 @@ namespace zed_wrapper {
                     }
                     computeDepth = (depth_SubNumber + cloud_SubNumber + odom_SubNumber) > 0; // Detect if one of the subscriber need to have the depth information
 
-                    grabbing = true;
                     if (computeDepth || create_mesh) {
                         int actual_confidence = zed.getConfidenceThreshold();
                         if (actual_confidence != confidence)
@@ -642,8 +642,6 @@ namespace zed_wrapper {
                     }
 
                     grab_status = zed.grab(runParams); // Ask to not compute the depth
-
-                    grabbing = false;
 
                     //cout << toString(grab_status) << endl;
                     if (grab_status != sl::ERROR_CODE::SUCCESS) { // Detect if a error occurred (for example: the zed have been disconnected) and re-initialize the ZED
@@ -828,6 +826,7 @@ namespace zed_wrapper {
             zed_id = 0;
             serial_number = 0;
             odometry_DB = "";
+            svo_realtime = false;
 
             nh = getMTNodeHandle();
             nh_ns = getMTPrivateNodeHandle();
@@ -842,6 +841,7 @@ namespace zed_wrapper {
 
             // Get parameters from launch file
             nh_ns.getParam("resolution", resolution);
+            nh_ns.getParam("svo_realtime", svo_realtime);
             nh_ns.getParam("quality", quality);
             nh_ns.getParam("sensing_mode", sensing_mode);            
             nh_ns.getParam("odometry_DB", odometry_DB);
@@ -951,9 +951,10 @@ namespace zed_wrapper {
             base_transform.setIdentity();
 
             // Try to initialize the ZED
-            if (!svo_filepath.empty())
+            if (!svo_filepath.empty()){
+                if(svo_realtime) param.svo_real_time_mode = true;
                 param.svo_input_filename = svo_filepath.c_str();
-            else {
+            } else {
                 param.camera_fps = frame_rate;
                 param.camera_resolution = static_cast<sl::RESOLUTION> (resolution);
                 if (serial_number == 0)

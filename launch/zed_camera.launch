@@ -19,12 +19,14 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 <launch>
     <arg name="camera_model"          default="0" /> <!-- 0=ZED, 1=ZEDM-->
     <arg name="svo_file"              default="" /><!-- <arg name="svo_file" default="path/to/svo/file.svo"> -->
+    <arg name="svo_realtime"          default="false" /> 
     <arg name="zed_id"                default="0" />
     <!-- If a ZED SN is given, zed_id is ignored and the wrapper will specifically look for the ZED with the corresponding serial number -->
-    <arg name="serial_number"                default="0" /> 
+    <arg name="serial_number"         default="0" /> 
 
     <!-- GPU ID-->
     <arg name="gpu_id"                default="-1" />
+
     <!-- Definition coordinate frames -->
     <arg name="publish_tf"            default="true" />
     <arg name="odometry_frame"        default="odom" />
@@ -32,7 +34,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     <arg name="camera_frame"          default="zed_left_camera" />
     <arg name="depth_frame"           default="zed_depth_camera" />
     <arg name="imu_frame"             default="imu_raw" />
-    <arg name="imu_rate"             default="300" />
+    <arg name="imu_rate"              default="300" />
+
     <!-- Publish urdf zed -->
     <arg name="publish_urdf"          default="true" />
 
@@ -49,8 +52,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     <node name="zed_wrapper_node" pkg="zed_wrapper" type="zed_wrapper_node" output="screen" required="true"><!-- launch-prefix="valgrind" --> 
 
         <param name="camera_model" value="$(arg camera_model)" />
+
         <!-- publish odometry frame -->
         <param name="publish_tf"            value="$(arg publish_tf)" />
+
         <!-- Configuration frame camera -->    
         <param name="odometry_frame"        value="$(arg odometry_frame)" />
         <param name="base_frame"            value="$(arg base_frame)" />
@@ -60,6 +65,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     
         <!-- SVO file path -->
         <param name="svo_filepath"          value="$(arg svo_file)" />
+        <param name="svo_realtime"          value="$(arg svo_realtime)" />
 
         <!-- Mapping stuff -->
         <param name="create_mesh"           value="$(arg create_mesh)" />    
@@ -102,7 +108,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
         <param name="odometry_topic"        value="odom" />
         <param name="imu_topic"             value="imu_raw" />
-        <param name="imu_rate"            value="$(arg imu_rate)" />
+        <param name="imu_rate"              value="$(arg imu_rate)" />
 
     </node>
 
